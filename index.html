@@ -5,10 +5,554 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Table Viewer</title>
+  <!-- TODO: script/link integrity crossorigin-->
+  <!-- W8phone bootstrap 3.4.1 / BS5 & BS4 unsupported -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
+  <link href="https://cdn.datatables.net/2.0.7/css/dataTables.bootstrap5.min.css" rel="stylesheet" />
+  <style>
+    /* Optional: Style to ensure the QR modal is always centered and visible */
+    .modal-dialog-centered {
+      min-height: calc(100vh - 60px);
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+    }
+
+    .container {
+      padding-top: 20px;
+      padding-bottom: 20px;
+    }
+
+    /* Sticky button for toggling the toolbar */
+    #toolbar-toggle-btn {
+      position: fixed;
+      top: 15px;
+      right: 15px;
+      z-index: 1050;
+      /* Above most elements */
+      transition: all 0.3s ease-in-out;
+    }
+
+    /* Ensure filter row inputs are placed inside a header cell */
+    #datatable thead th.filter-cell {
+      padding-top: 5px;
+      padding-bottom: 5px;
+    }
+  </style>
 </head>
 
 <body>
-    WIP
+  <!-- Configuration toolbar -->
+  <button class="btn btn-warning shadow" id="toolbar-toggle-btn">
+    <i class="fas fa-gear"></i> Toggle config
+  </button>
+
+  <div class="container" id="config-panel">
+    <div class="card shadow-sm">
+      <div class="card-header bg-primary text-white">
+        <h5 class="mb-0">Configuration Panel</h5>
+      </div>
+      <div class="card-body">
+        <form id="config-form">
+          <div class="mb-3">
+            <label for="file-url" class="form-label">Table File Location</label>
+            <div class="input-group">
+              <span class="input-group-text">URL</span>
+              <input type="url" class="form-control" id="file-url" required
+                placeholder="e.g. public CSV, XLSX, or Google Sheets link" />
+            </div>
+          </div>
+
+          <div class="row">
+            <div class="col-md-6">
+              <h6>Row config</h6>
+              <div class="input-group mb-3">
+                <span class="input-group-text">Slice (start)</span>
+                <input type="number" class="form-control" id="row-slice-start" value="" min="0" />
+              </div>
+              <div class="input-group mb-3">
+                <span class="input-group-text">Slice (end)</span>
+                <input type="number" class="form-control" id="row-slice-end" value="" />
+              </div>
+              <div class="form-check form-switch mb-3">
+                <input class="form-check-input" type="checkbox" id="row-search" checked="true">
+                <label class="form-check-label" for="row-search">Searchable</label><br>
+              </div>
+            </div>
+
+            <div class="col-md-6">
+              <h6>Column config</h6>
+              <div class="input-group mb-3">
+                <span class="input-group-text">Slice (start)</span>
+                <input type="number" class="form-control" id="col-slice-start" value="" min="0" />
+              </div>
+              <div class="input-group mb-3">
+                <span class="input-group-text">Slice (end)</span>
+                <input type="number" class="form-control" id="col-slice-end" value="" />
+              </div>
+              <div class="form-check form-switch mb-3">
+                <input class="form-check-input" type="checkbox" id="col-search">
+                <label class="form-check-label" for="col-search">Searchable</label><br>
+              </div>
+              <div class="form-check form-switch mb-3">
+                <input class="form-check-input" type="checkbox" role="switch" id="col-sort" checked="true">
+                <label class="form-check-label" for="col-sort">Sort</label><br>
+              </div>
+              <div class="mb-3">
+                <label for="keep-cols" class="form-label">Keep Columns (indices, e.g. 0,2,3)</label>
+                <input type="text" class="form-control" id="keep-cols" placeholder="Leave empty for all" />
+              </div>
+            </div>
+          </div>
+
+          <h6>Miscellaneous</h6>
+          <div class="input-group mb-3">
+            <span class="input-group-text">Title</span>
+            <input type="text" class="form-control" id="table-title" placeholder="Loaded Data" />
+          </div>
+
+          <div class="form-check form-switch mb-3">
+            <input class="form-check-input" type="checkbox" role="switch" id="hide-toolbar" />
+            <label class="form-check-label" for="hide-toolbar">Hide this toolbar on start</label>
+          </div>
+
+          <div class="form-check form-switch mb-3">
+            <input class="form-check-input" type="checkbox" role="switch" id="cors-proxy" />
+            <label class="form-check-label" for="cors-proxy">Use a CORS proxy</label>
+          </div>
+
+          <div class="input-group mb-3">
+            <span class="input-group-text">URL</span>
+            <input type="text" class="form-control" id="proxy-url" placeholder="CORS proxy URL" />
+          </div>
+
+          <div class="d-flex justify-content-between">
+            <button type="button" class="btn btn-success me-2" id="refresh-btn">
+              <!-- FIXME: submit + validation checks? -->
+              <i class="fas fa-sync-alt"></i> Refresh
+            </button>
+            <button type="button" class="btn btn-info text-white" data-bs-toggle="modal" data-bs-target="#qr-modal"
+              id="share-btn">
+              <i class="fas fa-qrcode"></i> Share
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Datatable -->
+  <div class="container mt-4">
+    <h2 id="title">Loaded Data</h2>
+    <div id="loader" class="text-center my-5 d-none">
+      <div class="spinner-border text-primary" role="status">
+        <span class="visually-hidden">Loading...</span>
+      </div>
+      <p class="mt-2">Fetching and parsing data...</p>
+    </div>
+    <div class="alert alert-danger d-none" id="error-message" role="alert"></div>
+    <div class="table-responsive">
+      <table id="datatable" class="table table-striped table-bordered w-100" style="width: 100%">
+        <thead id="table-head"></thead>
+        <tbody id="table-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- QR code modal -->
+  <div class="modal fade" id="qr-modal" tabindex="-1" aria-labelledby="qr-modal-label" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title" id="qr-modal-label">Share</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body text-center">
+          <div class="text-center">
+            <div id="qrcode-container"></div>
+          </div>
+          <p class="mt-3 small text-muted">
+            Scan this QR code to load the current configuration.
+          </p>
+        </div>
+        <div class="modal-footer">
+          <a href="#" class="btn btn-primary" id="download-qr-btn" download="qr-code.png">
+            <i class="bi bi-download"></i> Download QR Code
+          </a>
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- DataTable -->
+  <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+  <script src="https://cdn.datatables.net/2.0.7/js/dataTables.min.js"></script>
+  <script src="https://cdn.datatables.net/2.0.7/js/dataTables.bootstrap5.min.js"></script>
+
+  <!-- Bootstrap -->
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+
+  <!-- XLSX / https://docs.sheetjs.com/docs/getting-started/installation/standalone/ -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+  <!-- QRCode.js -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+
+  <!-- Font Awesome icons -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/js/all.min.js"></script>
+
+  <script>
+    class TableViewer {
+      constructor() {
+        this.dataTable = null;
+        this.currentData = [];
+        this.currentConfig = TableViewer.getConfigFromUrl();
+        this.applyConfigToForm(this.currentConfig);
+        if (this.currentConfig.tableUrl)
+          this.loadData();
+      }
+
+      static getConfigFromUrl() {
+        const params = new URLSearchParams(window.location.search);
+
+        function getParam(name) {
+          const param = params.get(name);
+          return param && decodeURIComponent(param);
+        }
+
+        function getIntParam(name) {
+          const param = params.get(name);
+          return param ? parseInt(param, 10) : null;
+        }
+
+        function getIntsParam(name) {
+          const param = params.get(name);
+          return param ? param.split(',').map(Number) : [];
+        }
+
+        function getBoolParam(name) {
+          const param = getIntParam(name);
+          return param !== null ? Boolean(param) : null;
+        }
+
+        return {
+          tableUrl: getParam("tableUrl"),
+          rowSliceStart: getIntParam("rowSliceStart"),
+          rowSliceEnd: getIntParam("rowSliceEnd"),
+          rowSearch: getBoolParam("rowSearch") ?? true,
+          colSliceStart: getIntParam("colSliceStart"),
+          colSliceEnd: getIntParam("colSliceEnd"),
+          colSearch: getBoolParam("colSearch") ?? false,
+          colSort: getBoolParam("colSort") ?? true,
+          keepCols: getIntsParam("keepCols"),
+          title: getParam("title") ?? "Loaded Data",
+          hideToolbar: getBoolParam("hideToolbar") ?? false,
+          corsProxy: getBoolParam("corsProxy") ?? false,
+          corsProxyUrl: getParam("corsProxyUrl")
+        };
+      }
+
+      applyConfigToForm(cfg) {
+        $("#file-url").val(cfg.tableUrl);
+        $("#row-slice-start").val(cfg.rowSliceStart);
+        $("#row-slice-end").val(cfg.rowSliceEnd);
+        $("#row-search").prop("checked",cfg.rowSearch);
+        $("#col-slice-start").val(cfg.colSliceStart);
+        $("#col-slice-end").val(cfg.colSliceEnd);
+        $("#col-search").prop("checked",cfg.colSearch);
+        $("#col-sort").prop("checked",cfg.colSort);
+        $("#keep-cols").val(cfg.keepCols);
+        $("#table-title").val(cfg.title);
+        $("#hide-toolbar").prop("checked",cfg.hideToolbar);
+        $("#cors-proxy").prop("checked",cfg.corsProxy);
+        $("#proxy-url").val(cfg.corsProxyUrl);
+      }
+
+      getConfigFromForm() {
+        const keepCols = $("#keep-cols").val();
+        return {
+          tableUrl: $("#file-url").val(),
+          rowSliceStart: $("#row-slice-start").val(),
+          rowSliceEnd: $("#row-slice-end").val(),
+          rowSearch: $("#row-search").is(':checked') ? 1 : 0,
+          colSliceStart: $("#col-slice-start").val(),
+          colSliceEnd: $("#col-slice-end").val(),
+          colSearch: $("#col-search").is(':checked') ? 1 : 0,
+          colSort: $("#col-sort").is(':checked') ? 1 : 0,
+          keepCols: keepCols ? keepCols.split(',').map(Number) : [],
+          title: $("#table-title").val(),
+          hideToolbar: $("#hide-toolbar").is(':checked') ? 1 : 0,
+          corsProxy: $("#cors-proxy").is(':checked') ? 1 : 0,
+          corsProxyUrl: $("#proxy-url").val()
+        };
+
+      }
+
+      async downloadFromGoogleSheet(tableUrl)
+      {
+        const sheetIdRegex = /(\/|=)([^&./?,#]{13,})/;
+        const sheetId = tableUrl.match(sheetIdRegex)[2];
+
+        if (!sheetId) {
+          throw new Error(`Failed to detect spreadsheet ID (${sheetId}) in "${tableUrl}"`);
+        }
+
+        var rows = [];
+        await $.ajax({
+          url: `https://spreadsheets.google.com/a/google.com/tq?key=${sheetId}&tqx=responseHandler:sheets_callback`,
+          type: "GET",
+          dataType: "jsonp",
+          jsonp: false,
+          jsonpCallback: "sheets_callback",
+          crossDomain: true,
+          success: function (data, status, xhr) {
+            // console.log("[OK] JSONP", data, status, xhr);
+            const table = data.table;
+            const cols = table.cols.map(v => v.label || `(${v.id})`);
+            rows = [cols].concat(
+              table.rows.map(row => row.c.map(
+                // Cells can be undefined and should be UTF8 encoded
+                cell => cell && cell.v))
+            );
+          },
+          error: (xhr, status, error) => {
+            console.log("[KO] JSONP", xhr, status, error);
+          },
+        });
+        return rows;
+      }
+
+      async downloadFromURL(tableUrl) {
+        const response = await fetch(tableUrl, {
+          method: 'GET',
+          mode: 'cors',
+          redirect: 'follow'
+        });
+
+        if (!response.ok) {
+          throw new Error(`HTTP error! Status: ${response.status}. The proxy or file source may be inaccessible.`);
+        }
+
+        return response.arrayBuffer();
+      }
+
+      async downloadRows()
+      {
+        const tableUrl = new URL(this.currentConfig.tableUrl);
+        if (tableUrl.hostname.includes("google")) {
+          return this.downloadFromGoogleSheet(tableUrl.toString());
+        }
+
+        const filedata = await this.downloadFromURL(tableUrl.toString());
+
+        const workbook = XLSX.read(filedata, { type: 'array', raw: true });
+        const sheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[sheetName];
+
+        return XLSX.utils.sheet_to_json(worksheet, { header: 1, raw: false });
+      }
+
+      async loadData() {
+        $("#title").html(this.currentConfig.title || "Loaded Data");
+        if (this.currentConfig.hideToolbar) {
+          $("#config-panel").slideUp(200);
+        }
+
+        // Load file (TODO: CORS proxy)
+        try {
+          let rawData = await this.downloadRows();
+
+          if (rawData.length === 0) {
+            throw new Error("File is empty or could not be parsed.");
+          }
+          // console.log(rawData);
+
+          // Apply column slicing and filtering
+          const colStart = this.currentConfig.colSliceStart || 0;
+          const colEnd = this.currentConfig.colSliceEnd || undefined;
+          const keepCols = this.currentConfig.keepCols
+          const filterColumns = function (row) {
+            if (keepCols.length == 0)
+              return row; // Preserve sparse values
+            return row.filter((value, i) => keepCols.includes(i));
+          };
+          rawData = rawData.map(row => filterColumns(row.slice(colStart, colEnd)));
+
+          // Convert the data into proper object for DataTable
+          const headers = rawData[0];
+          const rows = rawData.slice(1);
+          this.populateDataTable(rows.map((row) => {
+            const obj = {};
+            headers.forEach((header, index) => {
+              obj[header] = row[index] || "";
+            });
+            return obj;
+          }));
+        } catch (error) {
+          console.error(error.message);
+        }
+      }
+
+      populateDataTable(data) {
+        if (!data || !data.length) {
+          this.showError("No data to display");
+          return;
+        }
+
+        // Destroy existing DataTable
+        if (this.dataTable) {
+          this.dataTable.destroy();
+        }
+
+        // Clear existing table
+        const tableHead = document.getElementById("table-head");
+        const tableBody = document.getElementById("table-body");
+        tableHead.innerHTML = "";
+        tableBody.innerHTML = "";
+
+        // Create headers
+        const headers = Object.keys(data[0]);
+        const headerRow = document.createElement("tr");
+        headers.forEach((header) => {
+          const th = document.createElement("th");
+          th.textContent = header;
+          headerRow.appendChild(th);
+        });
+        tableHead.appendChild(headerRow);
+
+        // Create data rows
+        const rowStart = this.currentConfig.rowSliceStart || 0;
+        const rowEnd = this.currentConfig.rowSliceEnd || undefined;
+        data = data.slice(rowStart, rowEnd);
+        data.forEach((row) => {
+          const tr = document.createElement("tr");
+          headers.forEach((header) => {
+            const td = document.createElement("td");
+            td.textContent = row[header] || "";
+            tr.appendChild(td);
+          });
+          tableBody.appendChild(tr);
+        });
+
+        // Show table and initialize DataTables
+        document.getElementById("datatable").style.display = "table";
+        const hasColSearch = this.currentConfig.colSearch;
+
+        this.dataTable = $("#datatable").DataTable({
+          searching: this.currentConfig.rowSearch,
+          ordering: this.currentConfig.colSort,
+          responsive: true,
+          pageLength: 25,
+          lengthMenu: [10, 25, 50, 100],
+          order: [],
+          columnDefs: [{ targets: "_all", className: "dt-center" }],
+          language: {
+            search: "Search all columns:",
+            lengthMenu: "Show _MENU_ entries",
+            info: "Showing _START_ to _END_ of _TOTAL_ entries",
+            paginate: {
+              first: "First",
+              last: "Last",
+              next: "Next",
+              previous: "Previous",
+            },
+          },
+          initComplete: function() {
+            this.api().columns().every(function() {
+                if (!hasColSearch)
+                  return;
+                const column = this;
+                const header = $(column.header());
+                const style = "width:100%; margin-top:5px; padding:4px;";
+                const placeholder = 'type="text" placeholder="Filter..."';
+                $(`<input ${placeholder} style="${style}" />`)
+                  .appendTo(header)
+                  .on('click', ev => {
+                      ev.stopPropagation();
+                  })
+                  .on('keyup change', function() {
+                      if (column.search() !== this.value) {
+                          column.search(this.value).draw();
+                      }
+                  });
+            });
+        }
+        });
+      }
+
+      applyConfigToUrl() {
+        let params = {};
+        for (const key in this.currentConfig) {
+          if (this.currentConfig.hasOwnProperty(key) && !["", null].includes(this.currentConfig[key])) {
+            params[key] = this.currentConfig[key];
+          }
+        }
+        const uriParams = $.param(params);
+        window.history.replaceState(null, null, `?${uriParams}`);
+      }
+
+      refreshData() {
+        // TODO: Cache if URL hasn't changed
+        this.currentConfig = this.getConfigFromForm();
+        this.applyConfigToUrl();
+        this.loadData();
+      }
+
+      generateQRCode() {
+        this.currentConfig = this.getConfigFromForm();
+        this.applyConfigToUrl();
+        const fullUrl = `${window.location.href}`;
+
+        // Clear existing QR code
+        const qrcodeContainer = document.getElementById("qrcode-container");
+        qrcodeContainer.innerHTML = "";
+
+        // Generate new QR code
+        new QRCode(qrcodeContainer, {
+          text: fullUrl,
+          width: 256,
+          height: 256,
+          colorDark: "#000000",
+          colorLight: "#ffffff",
+          correctLevel: QRCode.CorrectLevel.H,
+        });
+
+        setTimeout(() => {
+          // Update download link after QR code is generated
+          const qrCanvas = document.querySelector("#qrcode-container canvas");
+          if (qrCanvas) {
+            const downloadBtn = document.getElementById("download-qr-btn");
+            downloadBtn.href = qrCanvas.toDataURL("image/png");
+          }
+          // Fix center alignment
+          const qrImg = [qrCanvas, document.querySelector("#qrcode-container img")]
+          for (const item of qrImg) {
+            if (item && window.getComputedStyle(item, null).display !== "none") {
+              item.style.display = "inline";
+            }
+          }
+        }, 100);
+      }
+    }
+
+    // Initialise the application when DOM is loaded
+    document.addEventListener("DOMContentLoaded", () => {
+      const table_viewer = new TableViewer();
+      $("#refresh-btn").on("click", () => table_viewer.refreshData());
+      $("#share-btn").on("click", () => table_viewer.generateQRCode());
+      $("#toolbar-toggle-btn").on("click", () => {
+        const panel = $("#config-panel");
+        if (panel.is(":hidden")) {
+          panel.slideDown(200);
+        } else {
+          panel.slideUp(200);
+        }
+      });
+    });
+  </script>
 </body>
 
 </html>
